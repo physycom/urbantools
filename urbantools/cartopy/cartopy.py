@@ -75,15 +75,27 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                                 length1 + length2
                             )
 
-                            max_speed1 = graph[pred][node].get("maxspeed", 30)
-                            max_speed2 = graph[node][succ].get("maxspeed", 30)
-                            max_speed = max(max_speed1, max_speed2)
+                            max_speed = max(
+                                graph[pred][node].get("maxspeed", 30),
+                                graph[node][succ].get("maxspeed", 30),
+                            )
 
-                            geometry1 = graph[pred][node].get("geometry", LineString())
-                            geometry2 = graph[node][succ].get("geometry", LineString())
-                            # Create a new geometry for the merged edge
-                            merged_geometry = LineString(
-                                list(geometry1.coords) + list(geometry2.coords)
+                            flow = (
+                                graph[pred][node].get("flow", 0)
+                                + graph[node][succ].get("flow", 0)
+                            ) / 2
+
+                            geometry = LineString(
+                                list(
+                                    graph[pred][node]
+                                    .get("geometry", LineString())
+                                    .coords
+                                )
+                                + list(
+                                    graph[node][succ]
+                                    .get("geometry", LineString())
+                                    .coords
+                                )
                             )
 
                             # Merge the edge attributes, summing the length
@@ -93,10 +105,11 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                                 "highway": graph[pred][node].get("highway", "unknown"),
                                 "maxspeed": max_speed,
                                 "name": graph[pred][node].get("name", "no_name"),
-                                "geometry": merged_geometry,
+                                "geometry": geometry,
                                 "forbidden_turns": graph[node][succ].get(
                                     "forbidden_turns", ""
                                 ),  # How to manage removed nodes?
+                                "flow": flow,
                             }
 
                     if exit_flag:
