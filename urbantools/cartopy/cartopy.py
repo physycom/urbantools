@@ -16,116 +16,132 @@ _log = logging.getLogger(__name__)
 
 def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
     """
-    This function merges redundant edges in a directed graph.
-    A redundant edge is defined as an edge which has exactly one predecessor and one successor,
-    in one (degree 2) or both (degree 4) directions.
-    The function merges these edges by creating a new edge that connects the predecessors
-    and successors, and combines their attributes (length, width, max speed, etc.).
-    The function also handles the geometry of the edges, creating a new geometry that represents
-    the merged edge.
+    Merges degree-1 and degree-2 nodes in a directed graph by combining edges and attributes.
+
+    - Degree-1 case: in_degree==out_degree==1 → collapse A→B→C into A→C
+    - Degree-2 case: in_degree==out_degree==2 → collapse both A→B→C and C→B→A into A→C and C→A
+
+    Edge attributes merged: poly_length, width_TF (length-weighted mean), maxspeed (max),
+    flow (mean), name/highway from the first segment, forbidden_turns from the second, and geometry.
 
     Parameters
     ----------
-    graph (nx.DiGraph): The directed graph to process.
+    graph (nx.DiGraph)
+        The directed graph to process.
 
     Returns
     -------
-    graph (nx.DiGraph): The processed directed graph with degree 2 nodes merged.
+    nx.DiGraph
+        The processed directed graph with redundant edges merged.
     """
-    # Find all nodes with degree 2
     graph = graph.copy()
-    for degree in [1, 2]:
-        nodes_to_remove = [
-            node
-            for node in graph.nodes()
-            if graph.in_degree(node) == degree and graph.out_degree(node) == degree
+    changed = True
+
+    n_nodes, n_edges = graph.number_of_nodes(), graph.number_of_edges()
+
+    while changed:
+        changed = False
+        # collect all nodes whose in‑degree == out‑degree == 1 or 2
+        candidates = [
+            n
+            for n in graph.nodes()
+            if (deg := graph.in_degree(n)) == graph.out_degree(n) and deg in (1, 2)
         ]
 
-        number_of_nodes = len(graph.nodes()) + 1
-        while len(graph.nodes()) < number_of_nodes:
-            number_of_nodes = len(graph.nodes())
+        for n in candidates:
+            preds = list(graph.predecessors(n))
+            succs = list(graph.successors(n))
 
-            for node in nodes_to_remove[:]:
-                # Get predecessors and successors
-                predecessors = list(graph.predecessors(node))
-                successors = list(graph.successors(node))
+            merged_edges = []
+            for u in preds:
+                for v in succs:
+                    if u == v:
+                        continue  # skip self‑loops
+                    if not (graph.has_edge(u, n) and graph.has_edge(n, v)):
+                        continue
 
-                # if len(predecessors) != 2 or len(successors) != 2:
-                #     continue  # Just a safety check
+                    edge_un = graph[u][n]
+                    edge_nv = graph[n][v]
 
-                # Extract edge attributes (lengths in particular)
-                edge_attrs = {}
-                exit_flag = False
-                for pred in predecessors:
-                    for succ in successors:
-                        if pred == succ:
-                            # remove this node from nodes_to_remove
-                            nodes_to_remove.remove(node)
-                            exit_flag = True
-                            break
+                    length_un, length_nv = edge_un.get("poly_length"), edge_nv.get(
+                        "poly_length"
+                    )
+                    length = length_un + length_nv
 
-                        if graph.has_edge(pred, node) and graph.has_edge(node, succ):
-                            length1 = graph[pred][node].get("poly_length", 0)
-                            length2 = graph[node][succ].get("poly_length", 0)
+                    width = (
+                        edge_un.get("width_FT", 2) * length_un
+                        + edge_nv.get("width_FT", 2) * length_nv
+                    ) / length
 
-                            width1 = graph[pred][node].get("width_TF", 2)
-                            width2 = graph[node][succ].get("width_TF", 2)
-                            # Width mean is weighted by length
-                            width = (width1 * length1 + width2 * length2) / (
-                                length1 + length2
+                    maxspeed = max(
+                        edge_un.get("maxspeed", 30), edge_nv.get("maxspeed", 30)
+                    )
+                    flow = (edge_un.get("flow", 0) + edge_nv.get("flow", 0)) / 2
+
+                    geometry_un, geometry_nv = edge_un.get("geometry"), edge_nv.get(
+                        "geometry"
+                    )
+                    if geometry_un and geometry_nv:
+                        geom = LineString(
+                            list(geometry_un.coords) + list(geometry_nv.coords)
+                        )
+                    else:
+                        geom = geometry_un or geometry_nv
+
+                    merge_names = lambda n1, n2: (
+                        n2
+                        if n1 and n2 and n1.strip() in n2.strip()
+                        else (
+                            n1
+                            if n1 and n2 and n2.strip() in n1.strip()
+                            else (
+                                f"{n1.strip()} / {n2.strip()}"
+                                if n1 and n2
+                                else (n1 or n2 or "")
                             )
+                        )
+                    )
 
-                            max_speed = max(
-                                graph[pred][node].get("maxspeed", 30),
-                                graph[node][succ].get("maxspeed", 30),
-                            )
-
-                            flow = (
-                                graph[pred][node].get("flow", 0)
-                                + graph[node][succ].get("flow", 0)
-                            ) / 2
-
-                            geometry = LineString(
-                                list(
-                                    graph[pred][node]
-                                    .get("geometry", LineString())
-                                    .coords
-                                )
-                                + list(
-                                    graph[node][succ]
-                                    .get("geometry", LineString())
-                                    .coords
-                                )
-                            )
-
-                            # Merge the edge attributes, summing the length
-                            edge_attrs[(pred, succ)] = {
-                                "poly_length": length1 + length2,
+                    merged_edges.append(
+                        (
+                            u,
+                            v,
+                            {
+                                "poly_length": length,
                                 "width_TF": width,
-                                "highway": graph[pred][node].get("highway", "unknown"),
-                                "maxspeed": max_speed,
-                                "name": graph[pred][node].get("name", "no_name"),
-                                "geometry": geometry,
-                                "forbidden_turns": graph[node][succ].get(
-                                    "forbidden_turns", ""
-                                ),  # How to manage removed nodes?
+                                "highway": "unknown",
+                                "name": merge_names(
+                                    edge_un.get("name", ""), edge_nv.get("name", "")
+                                ),
+                                "maxspeed": maxspeed,
                                 "flow": flow,
-                            }
+                                "geometry": geom,
+                                "forbidden_turns": edge_nv.get("forbidden_turns", ""),
+                            },
+                        )
+                    )
 
-                    if exit_flag:
-                        break
+            # only remove/add if we actually have something to merge
+            if merged_edges:
+                # remove old edges and the node
+                for u in preds:
+                    if graph.has_edge(u, n):
+                        graph.remove_edge(u, n)
+                for v in succs:
+                    if graph.has_edge(n, v):
+                        graph.remove_edge(n, v)
+                graph.remove_node(n)
 
-                # Add the merged edges
-                for (pred, succ), attrs in edge_attrs.items():
-                    graph.add_edge(pred, succ, **attrs)
+                # add the new merged edges
+                for u, v, attrs in merged_edges:
+                    graph.add_edge(u, v, **attrs)
 
-            # Remove nodes
-            graph.remove_nodes_from(nodes_to_remove)
-            nodes_to_remove = [
-                node
-                for node in graph.nodes()
-                if graph.in_degree(node) == degree and graph.out_degree(node) == degree
-            ]
+                changed = True
+
+        _log.info(
+            f"Reduced graph from {n_nodes} nodes and {n_edges} edges to {graph.number_of_nodes()}"
+            f" nodes and {graph.number_of_edges()} edges."
+        )
 
     return graph
 
@@ -138,15 +154,18 @@ def remove_dead_ends(graph: nx.DiGraph, type: str = "both") -> nx.DiGraph:
 
     Parameters
     ----------
-    graph (nx.DiGraph): The directed graph to process.
-    type (str): The type of dead ends to remove. Can be 'in', 'out', or 'both'.
+    graph (nx.DiGraph)
+        The directed graph to process.
+    type (str)
+        The type of dead ends to remove. Can be 'in', 'out', or 'both'.
         - 'in': Remove nodes with no predecessors (in-degree 0).
         - 'out': Remove nodes with no successors (out-degree 0).
         - 'both': Remove nodes with no predecessors and no successors.
 
     Returns
     -------
-    graph (nx.DiGraph): The processed directed graph with dead ends removed.
+    nx.DiGraph
+        The processed directed graph with dead ends removed.
 
     Raises
     ------
@@ -187,12 +206,15 @@ def extract_subgraph(graph: nx.DiGraph, flow_fraction: float = 0.8) -> nx.DiGrap
 
     Parameters
     ----------
-    graph (nx.DiGraph): The input directed graph.
-    flow_fraction (float): The fraction of total flow to consider for the subnetwork.
+    graph (nx.DiGraph)
+        The input directed graph.
+    flow_fraction (float)
+        The fraction of total flow to consider for the subnetwork.
 
     Returns
     -------
-    nx.DiGraph: A subnetwork of the original graph.
+    nx.DiGraph
+        A subnetwork of the original graph.
     """
     # Calculate the crossing for each edge
     total_crossing = 0.0
@@ -227,6 +249,10 @@ def extract_subgraph(graph: nx.DiGraph, flow_fraction: float = 0.8) -> nx.DiGrap
     # Create a subgraph with the selected edges
     subgraph = graph.edge_subgraph(selected_edges).copy()
 
+    _log.info(
+        f"Extracted subnetwork with {len(subgraph.nodes())} nodes and {len(subgraph.edges())} edges from the original graph with {len(graph.nodes())} nodes and {len(graph.edges())} edges."
+    )
+
     return subgraph
 
 
@@ -242,14 +268,19 @@ def reconnect_subgraph(
 
     Parameters
     ----------
-    graph (nx.DiGraph): The original directed graph.
-    subgraph (nx.DiGraph): The subgraph to reconnect.
-    weight (str): The edge attribute to use as weight for the shortest path.
+    graph (nx.DiGraph)
+        The original directed graph.
+    subgraph (nx.DiGraph)
+        The subgraph to reconnect.
+    weight (str)
+        The edge attribute to use as weight for the shortest path.
 
     Returns
     -------
-    nx.DiGraph: The reconnected subgraph.
+    nx.DiGraph
+        The reconnected subgraph.
     """
+    n_nodes, n_edges = subgraph.number_of_nodes(), subgraph.number_of_edges()
     # Reconnect the subnetwork
     subgraph_nodes = set(subgraph.nodes())
 
@@ -296,5 +327,10 @@ def reconnect_subgraph(
                     heapq.heappush(heap, (cum_length + w, neighbor))
                     if neighbor not in parents:  # Set parent if first time
                         parents[neighbor] = current
+
+    _log.info(
+        f"Reconnected {subgraph.number_of_nodes() - n_nodes} nodes "
+        f"and {subgraph.number_of_edges() - n_edges} edges to the subgraph."
+    )
 
     return subgraph
