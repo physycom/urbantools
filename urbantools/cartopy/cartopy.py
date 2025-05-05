@@ -130,6 +130,57 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
     return graph
 
 
+def remove_dead_ends(graph: nx.DiGraph, type: str = "both") -> nx.DiGraph:
+    """
+    Remove dead ends from a directed graph. A dead end is defined as a node with no
+    predecessors (in-degree 0) or no successors (out-degree 0). The function can
+    remove dead ends in one or both directions, depending on the 'type' parameter.
+
+    Parameters
+    ----------
+    graph (nx.DiGraph): The directed graph to process.
+    type (str): The type of dead ends to remove. Can be 'in', 'out', or 'both'.
+        - 'in': Remove nodes with no predecessors (in-degree 0).
+        - 'out': Remove nodes with no successors (out-degree 0).
+        - 'both': Remove nodes with no predecessors and no successors.
+
+    Returns
+    -------
+    graph (nx.DiGraph): The processed directed graph with dead ends removed.
+
+    Raises
+    ------
+    ValueError: If 'type' is not one of 'in', 'out', or 'both'.
+    """
+    pruned_graph = graph.copy()
+    if type.lower() not in ["in", "out", "both"]:
+        raise ValueError(f"Invalid type '{type}'. Must be 'in', 'out', or 'both'.")
+    if type.lower() == "out" or type.lower() == "both":
+        while True:
+            dead_ends = [
+                node
+                for node in pruned_graph.nodes
+                if pruned_graph.out_degree(node) == 0
+            ]
+            if not dead_ends:
+                break
+            pruned_graph.remove_nodes_from(dead_ends)
+    if type.lower() == "in" or type.lower() == "both":
+        while True:
+            dead_ends = [
+                node for node in pruned_graph.nodes if pruned_graph.in_degree(node) == 0
+            ]
+            if not dead_ends:
+                break
+            pruned_graph.remove_nodes_from(dead_ends)
+
+    _log.info(
+        f"Removed {len(graph.nodes()) - len(pruned_graph.nodes())} dead ends from the graph."
+    )
+
+    return pruned_graph
+
+
 def extract_subgraph(graph: nx.DiGraph, flow_fraction: float = 0.8) -> nx.DiGraph:
     """
     Extract a subgraph from the graph based on edge lengths and flow.
