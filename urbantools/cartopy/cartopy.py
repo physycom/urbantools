@@ -11,8 +11,6 @@ import networkx as nx
 from shapely.geometry import LineString
 from tqdm import tqdm
 
-_log = logging.getLogger(__name__)
-
 
 def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
     """
@@ -138,7 +136,7 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
 
                 changed = True
 
-        _log.info(
+        logging.getLogger(__name__).info(
             f"Reduced graph from {n_nodes} nodes and {n_edges} edges to {graph.number_of_nodes()}"
             f" nodes and {graph.number_of_edges()} edges."
         )
@@ -193,7 +191,7 @@ def remove_dead_ends(graph: nx.DiGraph, type: str = "both") -> nx.DiGraph:
                 break
             pruned_graph.remove_nodes_from(dead_ends)
 
-    _log.info(
+    logging.getLogger(__name__).info(
         f"Removed {len(graph.nodes()) - len(pruned_graph.nodes())} dead ends from the graph."
     )
 
@@ -249,7 +247,7 @@ def extract_subgraph(graph: nx.DiGraph, flow_fraction: float = 0.8) -> nx.DiGrap
     # Create a subgraph with the selected edges
     subgraph = graph.edge_subgraph(selected_edges).copy()
 
-    _log.info(
+    logging.getLogger(__name__).info(
         f"Extracted subnetwork with {len(subgraph.nodes())} nodes and {len(subgraph.edges())} edges from the original graph with {len(graph.nodes())} nodes and {len(graph.edges())} edges."
     )
 
@@ -328,7 +326,7 @@ def reconnect_subgraph(
                     if neighbor not in parents:  # Set parent if first time
                         parents[neighbor] = current
 
-    _log.info(
+    logging.getLogger(__name__).info(
         f"Reconnected {subgraph.number_of_nodes() - n_nodes} nodes "
         f"and {subgraph.number_of_edges() - n_edges} edges to the subgraph."
     )
