@@ -106,15 +106,15 @@ def build_webster_cycles(
             )
             continue
 
-        C = (1.5 * L + C) / (1 - Y)  # Webster's formula for cycle time
+        C_0 = (1.5 * L + C) / (1 - Y)  # Webster's formula for cycle time
 
         for (u, _, _), y in zip(list(in_edges), y_ratios):
-            green_time = (y / Y) * (C - L) if y > 0 else 1  # * scaling_factor
+            green_time = (y / Y) * (C_0 - L) if y > 0 else 1  # * scaling_factor
             records.append(
                 {
                     "id": tl,
                     "nF": u,
-                    "totalCycleTime": round(C),
+                    "totalCycleTime": round(C_0),
                     "greenTime": round(green_time),
                 }
             )
