@@ -1,6 +1,6 @@
 """
 This module contains functions to process and manipulate directed graphs using NetworkX.
-It includes functions to merge redundant edges, extract a subgraph based on flow,
+It includes functions to merge redundant edges, extract a subgraph based on mean flow,
 and reconnect a subgraph to the original graph.
 """
 
@@ -20,7 +20,7 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
     - Degree-2 case: in_degree==out_degree==2 → collapse both A→B→C and C→B→A into A→C and C→A
 
     Edge attributes merged: poly_length, width_TF (length-weighted mean), maxspeed (max),
-    flow (mean), name/highway from the first segment, forbidden_turns from the second, and geometry.
+    mean_flow, name/highway from the first segment, forbidden_turns from the second, and geometry.
 
     Parameters
     ----------
@@ -74,7 +74,9 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                     maxspeed = max(
                         edge_un.get("maxspeed", 30), edge_nv.get("maxspeed", 30)
                     )
-                    flow = (edge_un.get("flow", 0) + edge_nv.get("flow", 0)) / 2
+                    mean_flow = (
+                        edge_un.get("mean_flow", 0) + edge_nv.get("mean_flow", 0)
+                    ) / 2
 
                     geometry_un, geometry_nv = edge_un.get("geometry"), edge_nv.get(
                         "geometry"
@@ -112,7 +114,7 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                                     edge_un.get("name", ""), edge_nv.get("name", "")
                                 ),
                                 "maxspeed": maxspeed,
-                                "flow": flow,
+                                "mean_flow": mean_flow,
                                 "geometry": geom,
                                 "forbidden_turns": edge_nv.get("forbidden_turns", ""),
                             },
@@ -200,14 +202,14 @@ def remove_dead_ends(graph: nx.DiGraph, type: str = "both") -> nx.DiGraph:
 
 def extract_subgraph(graph: nx.DiGraph, flow_fraction: float = 0.8) -> nx.DiGraph:
     """
-    Extract a subgraph from the graph based on edge lengths and flow.
+    Extract a subgraph from the graph based on edge lengths and mean_flow.
 
     Parameters
     ----------
     graph (nx.DiGraph)
         The input directed graph.
     flow_fraction (float)
-        The fraction of total flow to consider for the subnetwork.
+        The fraction of total mean_flow to consider for the subnetwork.
 
     Returns
     -------
@@ -222,22 +224,22 @@ def extract_subgraph(graph: nx.DiGraph, flow_fraction: float = 0.8) -> nx.DiGrap
         if "length" not in attrs:
             raise ValueError(f"Edge {u}-{v} does not have 'length' attribute.")
         length = attrs["length"]
-        if "flow" not in attrs:
+        if "mean_flow" not in attrs:
             raise ValueError(f"Edge {u}-{v} does not have 'flow' attribute.")
-        flow = attrs["flow"]
-        crossing = length * flow
-        edge_crossings.append((u, v, crossing, flow))
+        mean_flow = attrs["mean_flow"]
+        crossing = length * mean_flow
+        edge_crossings.append((u, v, crossing, mean_flow))
         total_crossing += crossing
 
     crossing_limit = total_crossing * flow_fraction
 
-    # Sort edges by flow (descending)
+    # Sort edges by mean_flow (descending)
     edge_crossings.sort(key=lambda x: x[3], reverse=True)
 
     cumulative = 0.0
     selected_edges = []
 
-    # Select edges based on cumulative flow fraction
+    # Select edges based on cumulative mean_flow fraction
     for u, v, crossing, _ in edge_crossings:
         cumulative += crossing
         if cumulative >= crossing_limit:

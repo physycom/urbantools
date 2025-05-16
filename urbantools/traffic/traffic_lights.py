@@ -15,7 +15,7 @@ def build_webster_cycles(
     Build Webster cycles for a directed graph based on traffic lights and saturation flow.
     The function calculates the cycle time, green time, and red time for each traffic light
     in the graph. It also updates the graph with the calculated cycle times and green times.
-    The function assumes that the graph has a 'flow' attribute for each edge.
+    The function assumes that the graph has a 'mean_flow' attribute for each edge.
 
     The Webster's formula is:
     c_0 = (1.5 * L + C) / (1 - Y)
@@ -24,7 +24,7 @@ def build_webster_cycles(
         - c_0 is the cycle time
         - C is the base cycle time (default is 5)
         - L is the lost time per phase (default is 4)
-        - Y is the sum of the ratios of flow to saturation flow for each incoming edge
+        - Y is the sum of the ratios of mean_flow to saturation flow for each incoming edge
     The green time for each traffic light is calculated as:
     g_i = (y_i / Y) * (c_0 - L)
 
@@ -84,7 +84,7 @@ def build_webster_cycles(
         flows = []
         saturation_flows = []
         for _, _, data in in_edges:
-            flow = data.get("flow", 0)
+            flow = data.get("mean_flow", 0)
             width = data.get("width", None)
             s_flow = get_closest_saturation_flow(width)
             flows.append(flow)
