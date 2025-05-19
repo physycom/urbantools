@@ -102,6 +102,21 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                         )
                     )
 
+                    flows = [
+                        sum(x) / 2
+                        for x in zip(edge_un.get("flow", []), edge_nv.get("flow", []))
+                    ]
+                    speeds = [
+                        sum(x) / 2
+                        for x in zip(edge_un.get("speed", []), edge_nv.get("speed", []))
+                    ]
+                    densities = [
+                        sum(x) / 2
+                        for x in zip(
+                            edge_un.get("density", []), edge_nv.get("density", [])
+                        )
+                    ]
+
                     merged_edges.append(
                         (
                             u,
@@ -113,10 +128,14 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                                 "name": merge_names(
                                     edge_un.get("name", ""), edge_nv.get("name", "")
                                 ),
+                                "length": length,
                                 "maxspeed": maxspeed,
                                 "mean_flow": mean_flow,
                                 "geometry": geom,
                                 "forbidden_turns": edge_nv.get("forbidden_turns", ""),
+                                "flow": flows,
+                                "speed": speeds,
+                                "density": densities,
                             },
                         )
                     )
