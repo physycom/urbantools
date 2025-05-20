@@ -9,6 +9,7 @@ import logging
 import heapq
 import networkx as nx
 from shapely.geometry import LineString
+from shapely.ops import linemerge, snap, unary_union
 from tqdm import tqdm
 
 
@@ -16,153 +17,118 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
     """
     Merges degree-1 and degree-2 nodes in a directed graph by combining edges and attributes.
 
-    - Degree-1 case: in_degree==out_degree==1 → collapse A→B→C into A→C
-    - Degree-2 case: in_degree==out_degree==2 → collapse both A→B→C and C→B→A into A→C and C→A
+    - Degree-1 case: in_degree==out_degree==1 -> collapse A->B->C into A->C
+    - Degree-2 case: in_degree==out_degree==2 -> collapse both A->B->C and C->B->A into A->C and C->A
 
     Edge attributes merged: poly_length, width_TF (length-weighted mean), maxspeed (max),
     mean_flow, name/highway from the first segment, forbidden_turns from the second, and geometry.
-
-    Parameters
-    ----------
-    graph (nx.DiGraph)
-        The directed graph to process.
-
-    Returns
-    -------
-    nx.DiGraph
-        The processed directed graph with redundant edges merged.
+    The geometry merge now snaps endpoints within a tolerance and unions both segments before merging.
     """
-    graph = graph.copy()
-    changed = True
 
-    n_nodes, n_edges = graph.number_of_nodes(), graph.number_of_edges()
+    def safe_merge_lines(
+        line1: LineString, line2: LineString, tol: float = 1e-6
+    ) -> LineString:
+        """
+        Merge two LineStrings by:
+          1. Snapping line2 to line1 within `tol`.
+          2. Taking their unary_union.
+          3. Running linemerge to coalesce into a single LineString.
+        """
+        if line1 is None or line1.is_empty:
+            return line2
+        if line2 is None or line2.is_empty:
+            return line1
+
+        snapped = snap(line2, line1, tol)
+        combined = unary_union([line1, snapped])
+
+        merged = linemerge(combined)
+        # If result has multiple parts (MultiLineString), pick the longest
+        if merged.geom_type == "MultiLineString":
+            parts = list(merged.geoms)
+            merged = max(parts, key=lambda g: g.length)
+
+        return merged
+
+    G = graph.copy()
+    changed = True
 
     while changed:
         changed = False
-        # collect all nodes whose in‑degree == out‑degree == 1 or 2
         candidates = [
             n
-            for n in graph.nodes()
-            if (deg := graph.in_degree(n)) == graph.out_degree(n) and deg in (1, 2)
+            for n in G.nodes()
+            if (d := G.in_degree(n)) == G.out_degree(n) and d in (1, 2)
         ]
 
         for n in candidates:
-            preds = list(graph.predecessors(n))
-            succs = list(graph.successors(n))
-
+            preds = list(G.predecessors(n))
+            succs = list(G.successors(n))
             merged_edges = []
+
             for u in preds:
                 for v in succs:
-                    if u == v:
-                        continue  # skip self‑loops
-                    if not (graph.has_edge(u, n) and graph.has_edge(n, v)):
+                    if u == v or not G.has_edge(u, n) or not G.has_edge(n, v):
                         continue
 
-                    edge_un = graph[u][n]
-                    edge_nv = graph[n][v]
+                    e1, e2 = G[u][n], G[n][v]
+                    l1, l2 = e1.get("poly_length", 0), e2.get("poly_length", 0)
+                    total_length = (l1 + l2) if (l1 and l2) else (l1 or l2 or 0)
 
-                    length_un, length_nv = edge_un.get("poly_length"), edge_nv.get(
-                        "poly_length"
-                    )
-                    length = length_un + length_nv
-
+                    w1 = e1.get("width_TF", e1.get("width_FT", 2))
+                    w2 = e2.get("width_TF", e2.get("width_FT", 2))
                     width = (
-                        edge_un.get("width_FT", 2) * length_un
-                        + edge_nv.get("width_FT", 2) * length_nv
-                    ) / length
-
-                    maxspeed = max(
-                        edge_un.get("maxspeed", 30), edge_nv.get("maxspeed", 30)
-                    )
-                    mean_flow = (
-                        edge_un.get("mean_flow", 0) + edge_nv.get("mean_flow", 0)
-                    ) / 2
-
-                    geometry_un, geometry_nv = edge_un.get("geometry"), edge_nv.get(
-                        "geometry"
-                    )
-                    if geometry_un and geometry_nv:
-                        geom = LineString(
-                            list(geometry_un.coords) + list(geometry_nv.coords)
-                        )
-                    else:
-                        geom = geometry_un or geometry_nv
-
-                    merge_names = lambda n1, n2: (
-                        n2
-                        if n1 and n2 and n1.strip() in n2.strip()
-                        else (
-                            n1
-                            if n1 and n2 and n2.strip() in n1.strip()
-                            else (
-                                f"{n1.strip()} / {n2.strip()}"
-                                if n1 and n2
-                                else (n1 or n2 or "")
-                            )
-                        )
+                        (w1 * l1 + w2 * l2) / total_length
+                        if total_length
+                        else max(w1, w2)
                     )
 
-                    flows = [
-                        sum(x) / 2
-                        for x in zip(edge_un.get("flow", []), edge_nv.get("flow", []))
-                    ]
-                    speeds = [
-                        sum(x) / 2
-                        for x in zip(edge_un.get("speed", []), edge_nv.get("speed", []))
-                    ]
-                    densities = [
-                        sum(x) / 2
-                        for x in zip(
-                            edge_un.get("density", []), edge_nv.get("density", [])
-                        )
-                    ]
+                    maxspeed = max(e1.get("maxspeed", 0), e2.get("maxspeed", 0))
+                    mean_flow = (e1.get("mean_flow", 0) + e2.get("mean_flow", 0)) / 2
 
-                    merged_edges.append(
-                        (
-                            u,
-                            v,
-                            {
-                                "poly_length": length,
-                                "width_TF": width,
-                                "highway": "unknown",
-                                "name": merge_names(
-                                    edge_un.get("name", ""), edge_nv.get("name", "")
-                                ),
-                                "length": length,
-                                "maxspeed": maxspeed,
-                                "mean_flow": mean_flow,
-                                "geometry": geom,
-                                "forbidden_turns": edge_nv.get("forbidden_turns", ""),
-                                "flow": flows,
-                                "speed": speeds,
-                                "density": densities,
-                            },
-                        )
-                    )
+                    geom1, geom2 = e1.get("geometry"), e2.get("geometry")
+                    merged_geom = None
+                    if geom1 or geom2:
+                        merged_geom = safe_merge_lines(geom1, geom2)
 
-            # only remove/add if we actually have something to merge
+                    def avg_list(a, b):
+                        if a and b and len(a) == len(b):
+                            return [(x + y) / 2 for x, y in zip(a, b)]
+                        return a or b or []
+
+                    merged_attrs = {
+                        "poly_length": total_length,
+                        "length": total_length,
+                        "width_TF": width,
+                        "maxspeed": maxspeed,
+                        "mean_flow": mean_flow,
+                        "geometry": merged_geom,
+                        "name": e1.get("name", "") or e2.get("name", ""),
+                        "highway": e1.get("highway", "") or e2.get("highway", ""),
+                        "forbidden_turns": e2.get("forbidden_turns", ""),
+                        "flow": avg_list(e1.get("flow"), e2.get("flow")),
+                        "speed": avg_list(e1.get("speed"), e2.get("speed")),
+                        "density": avg_list(e1.get("density"), e2.get("density")),
+                    }
+                    merged_edges.append((u, v, merged_attrs))
+
             if merged_edges:
-                # remove old edges and the node
                 for u in preds:
-                    if graph.has_edge(u, n):
-                        graph.remove_edge(u, n)
+                    if G.has_edge(u, n):
+                        G.remove_edge(u, n)
                 for v in succs:
-                    if graph.has_edge(n, v):
-                        graph.remove_edge(n, v)
-                graph.remove_node(n)
-
-                # add the new merged edges
+                    if G.has_edge(n, v):
+                        G.remove_edge(n, v)
+                G.remove_node(n)
                 for u, v, attrs in merged_edges:
-                    graph.add_edge(u, v, **attrs)
-
+                    G.add_edge(u, v, **attrs)
                 changed = True
 
         logging.getLogger(__name__).info(
-            f"Reduced graph from {n_nodes} nodes and {n_edges} edges to {graph.number_of_nodes()}"
-            f" nodes and {graph.number_of_edges()} edges."
+            f"Now: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
         )
 
-    return graph
+    return G
 
 
 def remove_dead_ends(graph: nx.DiGraph, type: str = "both") -> nx.DiGraph:
