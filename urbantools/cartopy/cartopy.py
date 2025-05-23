@@ -92,9 +92,11 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                         merged_geom = safe_merge_lines(geom1, geom2)
 
                     def avg_list(a, b):
+                        if not a and not b:
+                            return [0] * 288
                         if a and b and len(a) == len(b):
                             return [(x + y) / 2 for x, y in zip(a, b)]
-                        return a or b or []
+                        return a or b
 
                     merged_attrs = {
                         "poly_length": total_length,
