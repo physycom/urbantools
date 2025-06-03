@@ -8,6 +8,7 @@ import logging
 
 import heapq
 import networkx as nx
+import numpy as np
 from shapely.geometry import LineString
 from shapely.ops import linemerge, snap, unary_union
 from tqdm import tqdm
@@ -92,15 +93,29 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                         merged_geom = safe_merge_lines(geom1, geom2)
 
                     def avg_list(a, b):
-                        if not a and not b:
+                        def is_empty(x):
+                            if x is None:
+                                return True
+                            if isinstance(x, (list, tuple)):
+                                return len(x) == 0
+                            if hasattr(x, "size"):
+                                return x.size == 0
+                            return False
+
+                        if is_empty(a) and is_empty(b):
                             return [0] * 288
-                        if a and b and len(a) == len(b):
-                            return [(x + y) / 2 for x, y in zip(a, b)]
-                        return a or b
+                        if not is_empty(a) and not is_empty(b):
+                            # Convert to np.array for elementwise ops
+                            arr_a = np.array(a)
+                            arr_b = np.array(b)
+                            if arr_a.shape == arr_b.shape:
+                                return ((arr_a + arr_b) / 2).tolist()
+                        return a if not is_empty(a) else b
 
                     merged_attrs = {
                         "poly_length": total_length,
                         "length": total_length,
+                        "nlanes": max(e1.get("nlanes", 1), e2.get("nlanes", 1)),
                         "width_TF": width,
                         "maxspeed": maxspeed,
                         "mean_flow": mean_flow,
