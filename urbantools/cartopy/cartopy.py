@@ -127,9 +127,9 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                         "name": e1.get("name", "") or e2.get("name", ""),
                         "highway": e1.get("highway", "") or e2.get("highway", ""),
                         "forbidden_turns": e2.get("forbidden_turns", ""),
-                        "flow": avg_list(e1.get("flow"), e2.get("flow")),
-                        "speed": avg_list(e1.get("speed"), e2.get("speed")),
-                        "density": avg_list(e1.get("density"), e2.get("density")),
+                        "flows": avg_list(e1.get("flows"), e2.get("flows")),
+                        "speeds": avg_list(e1.get("speeds"), e2.get("speeds")),
+                        "densities": avg_list(e1.get("densities"), e2.get("densities")),
                     }
                     merged_edges.append((u, v, merged_attrs))
 
