@@ -104,13 +104,17 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
 
                         if is_empty(a) and is_empty(b):
                             return [0] * 288
-                        if not is_empty(a) and not is_empty(b):
-                            # Convert to np.array for elementwise ops
-                            arr_a = np.array(a)
-                            arr_b = np.array(b)
-                            if arr_a.shape == arr_b.shape:
-                                return ((arr_a + arr_b) / 2).tolist()
-                        return a if not is_empty(a) else b
+                        if is_empty(a):
+                            return b
+                        if is_empty(b):
+                            return a
+                        # Both are non-empty, try to average them
+                        arr_a = np.array(a)
+                        arr_b = np.array(b)
+                        if arr_a.shape == arr_b.shape:
+                            return ((arr_a + arr_b) / 2).tolist()
+                        # If shapes don't match, return the first non-empty one
+                        return a
 
                     merged_attrs = {
                         "poly_length": total_length,
@@ -227,8 +231,10 @@ def extract_subgraph(graph: nx.DiGraph, flow_fraction: float = 0.8) -> nx.DiGrap
             raise ValueError(f"Edge {u}-{v} does not have 'length' attribute.")
         length = attrs["length"]
         if "mean_flow" not in attrs:
-            raise ValueError(f"Edge {u}-{v} does not have 'flow' attribute.")
-        mean_flow = attrs["mean_flow"]
+            logging.getLogger(__name__).warning(
+                f"Edge {u}-{v} does not have 'mean_flow' attribute. Assuming mean_flow=0."
+            )
+        mean_flow = attrs.get("mean_flow", 0)
         crossing = length * mean_flow
         edge_crossings.append((u, v, crossing, mean_flow))
         total_crossing += crossing
