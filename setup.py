@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="urbantools",
-    version="0.0.11",
+    version="0.0.12",
     author="Physycom City Science Lab",
     packages=find_packages(where="."),
     package_dir={"": "."},
