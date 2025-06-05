@@ -265,14 +265,15 @@ def extract_subgraph(graph: nx.DiGraph, flow_fraction: float = 0.8) -> nx.DiGrap
 
 
 def reconnect_subgraph(
-    graph: nx.DiGraph, subgraph: nx.DiGraph, weight: str = "length"
+    graph: nx.DiGraph, subgraph: nx.DiGraph, weight: str = "length", min_degree: int = 2, pruning: bool = True
 ) -> nx.DiGraph:
     """
-    Reconnect a subgraph to the original graph by adding edges based on shortest paths.
-    The idea of the algorithm is to find the shortest path (in the main graph) between
-    nodes in the subgraph,and add those nodes/edges to the subgraph if they are not already
-    present. This is done using a custom Dijkstra-like which stops as soon as it finds a
-    node in the subgraph.
+    Reconnect a subgraph to the original graph using an incremental approach with pruning.
+    This algorithm mimics the C++ FeatureSelection approach by:
+    1. Starting with the subgraph as a base
+    2. Incrementally adding edges from the original graph
+    3. Pruning nodes with degree < min_degree if pruning is enabled
+    4. Finding connected components and maintaining the largest one
 
     Parameters
     ----------
@@ -281,7 +282,11 @@ def reconnect_subgraph(
     subgraph (nx.DiGraph)
         The subgraph to reconnect.
     weight (str)
-        The edge attribute to use as weight for the shortest path.
+        The edge attribute to use as weight for selecting edges.
+    min_degree (int)
+        Minimum degree threshold for pruning nodes.
+    pruning (bool)
+        Whether to enable pruning of low-degree nodes.
 
     Returns
     -------
@@ -289,56 +294,119 @@ def reconnect_subgraph(
         The reconnected subgraph.
     """
     n_nodes, n_edges = subgraph.number_of_nodes(), subgraph.number_of_edges()
-    # Reconnect the subnetwork
+    
+    # Convert to undirected for degree calculations (mimicking C++ undirected graph)
+    working_graph = subgraph.to_undirected().to_directed()
     subgraph_nodes = set(subgraph.nodes())
-
-    for source in tqdm(subgraph_nodes, desc="Reconnecting subnetwork", leave=False):
-        visited = set()
-        heap = [(0, source)]  # (cumulative_length, current_node)
-        parents = {source: None}  # For reconstructing paths
-        targets_remaining = subgraph_nodes - {source}
-
-        while heap and targets_remaining:
-            cum_length, current = heapq.heappop(heap)
-
-            if current in visited:
-                continue
-            visited.add(current)
-
-            if current in targets_remaining:
-                # Reconstruct path backwards
-                path = []
-                node = current
-                while node is not None:
-                    path.append(node)
-                    node = parents[node]
-                path.reverse()
-
-                # Add edges and nodes from path
-                for i in range(len(path) - 1):
-                    u, v = path[i], path[i + 1]
-                    if not subgraph.has_edge(u, v):
-                        if u not in subgraph:
-                            subgraph.add_node(u, **graph.nodes[u])
-                        if v not in subgraph:
-                            subgraph.add_node(v, **graph.nodes[v])
-                        subgraph.add_edge(u, v, **graph[u][v])
-
-                targets_remaining.remove(current)
-                continue  # Continue search for more targets
-
-            # Expand neighbors
-            for neighbor in graph.successors(current):
-                if neighbor not in visited:
-                    edge_data = graph[current][neighbor]
-                    w = edge_data.get(weight, 1)
-                    heapq.heappush(heap, (cum_length + w, neighbor))
-                    if neighbor not in parents:  # Set parent if first time
-                        parents[neighbor] = current
-
+    
+    # Get all edges from original graph, sorted by weight
+    all_edges = []
+    for u, v, attrs in graph.edges(data=True):
+        edge_weight = attrs.get(weight, 1)
+        all_edges.append((edge_weight, u, v, attrs))
+    
+    # Sort edges by weight (ascending - prefer shorter/lighter edges)
+    all_edges.sort(key=lambda x: x[0])
+    
+    # Track removed nodes for pruning
+    removed_nodes = set()
+    
+    def prune_low_degree_nodes():
+        """Prune nodes with degree < min_degree"""
+        if not pruning:
+            return 0
+            
+        pruned_count = 0
+        changed = True
+        
+        while changed:
+            changed = False
+            nodes_to_remove = []
+            
+            for node in working_graph.nodes():
+                if node not in removed_nodes:
+                    # Calculate total degree (in + out for directed graph)
+                    total_degree = working_graph.in_degree(node) + working_graph.out_degree(node)
+                    if total_degree < min_degree:
+                        nodes_to_remove.append(node)
+            
+            if nodes_to_remove:
+                removed_nodes.update(nodes_to_remove)
+                pruned_count += len(nodes_to_remove)
+                changed = True
+                
+        return pruned_count
+    
+    def get_largest_component():
+        """Get the largest connected component from non-removed nodes"""
+        # Create filtered graph without removed nodes
+        active_nodes = [n for n in working_graph.nodes() if n not in removed_nodes]
+        if not active_nodes:
+            return nx.DiGraph()
+            
+        active_subgraph = working_graph.subgraph(active_nodes)
+        
+        # Find connected components in undirected version
+        undirected_active = active_subgraph.to_undirected()
+        components = list(nx.connected_components(undirected_active))
+        
+        if not components:
+            return nx.DiGraph()
+            
+        # Get largest component
+        largest_component = max(components, key=len)
+        return working_graph.subgraph(largest_component).copy()
+    
+    # Incremental edge addition
+    edges_added = 0
+    
+    for edge_weight, u, v, attrs in tqdm(all_edges, desc="Reconnecting subnetwork", leave=False):
+        # Skip if edge already exists
+        if working_graph.has_edge(u, v):
+            continue
+            
+        # Add nodes if they don't exist
+        if u not in working_graph:
+            working_graph.add_node(u, **graph.nodes.get(u, {}))
+        if v not in working_graph:
+            working_graph.add_node(v, **graph.nodes.get(v, {}))
+            
+        # Add edge
+        working_graph.add_edge(u, v, **attrs)
+        edges_added += 1
+        
+        # Prune low-degree nodes
+        pruned = prune_low_degree_nodes()
+        
+        # Check if we have a meaningful connected component
+        current_active_nodes = len([n for n in working_graph.nodes() if n not in removed_nodes])
+        
+        if current_active_nodes >= len(subgraph_nodes):
+            # Get largest component
+            largest_comp = get_largest_component()
+            
+            # Check if largest component contains most of original subgraph nodes
+            comp_nodes = set(largest_comp.nodes())
+            overlap = len(subgraph_nodes.intersection(comp_nodes))
+            
+            if overlap >= len(subgraph_nodes) * 0.8:  # 80% overlap threshold
+                logging.getLogger(__name__).info(
+                    f"Reconnected with {largest_comp.number_of_nodes()} nodes "
+                    f"and {largest_comp.number_of_edges()} edges. "
+                    f"Added {edges_added} edges, pruned {len(removed_nodes)} nodes."
+                )
+                return largest_comp
+    
+    # Fallback: return largest component of current working graph
+    final_graph = get_largest_component()
+    
+    if final_graph.number_of_nodes() == 0:
+        logging.getLogger(__name__).warning("Reconnection failed, returning original subgraph")
+        return subgraph
+    
     logging.getLogger(__name__).info(
-        f"Reconnected {subgraph.number_of_nodes() - n_nodes} nodes "
-        f"and {subgraph.number_of_edges() - n_edges} edges to the subgraph."
+        f"Reconnected {final_graph.number_of_nodes() - n_nodes} nodes "
+        f"and {final_graph.number_of_edges() - n_edges} edges to the subgraph."
     )
 
-    return subgraph
+    return final_graph
