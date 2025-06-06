@@ -245,14 +245,16 @@ def extract_subgraph(graph: nx.DiGraph, flow_fraction: float = 0.8) -> nx.DiGrap
     edge_crossings.sort(key=lambda x: x[3], reverse=True)
 
     cumulative = 0.0
-    selected_edges = []
+    selected_edges = set()
 
     # Select edges based on cumulative mean_flow fraction
     for u, v, crossing, _ in edge_crossings:
         cumulative += crossing
         if cumulative >= crossing_limit:
             break
-        selected_edges.append((u, v))
+        selected_edges.add((u, v))
+        if graph.has_edge(v, u):
+            selected_edges.add((v, u))
 
     # Create a subgraph with the selected edges
     subgraph = graph.edge_subgraph(selected_edges).copy()
