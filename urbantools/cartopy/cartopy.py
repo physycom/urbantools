@@ -73,10 +73,14 @@ def merge_edge_attributes(e1: dict, e2: dict) -> dict:
         line1: LineString, line2: LineString, tol: float = 1e-6
     ) -> LineString:
         """
-        Merge two LineStrings by:
-          1. Snapping line2 to line1 within `tol`.
-          2. Taking their unary_union.
-          3. Running linemerge to coalesce into a single LineString.
+        Merge two LineStrings by connecting them sequentially.
+        This assumes line1 comes before line2 in the graph traversal (A->B->C).
+        
+        The function:
+          1. Checks connectivity between endpoints
+          2. Reverses line2 if needed to maintain proper orientation
+          3. Creates a continuous LineString from the coordinates
+          4. Falls back to union+linemerge if direct connection fails
         """
         if line1 is None or line1.is_empty:
             return line2
@@ -84,18 +88,55 @@ def merge_edge_attributes(e1: dict, e2: dict) -> dict:
             return line1
 
         try:
-            snapped = snap(line2, line1, tol)
-            combined = unary_union([line1, snapped])
-
-            merged = linemerge(combined)
-            # If result has multiple parts (MultiLineString), pick the longest
-            if merged.geom_type == "MultiLineString":
-                parts = list(merged.geoms)
-                merged = max(parts, key=lambda g: g.length)
-
-            return merged
+            # Get coordinates
+            coords1 = list(line1.coords)
+            coords2 = list(line2.coords)
+            
+            # Find the best way to connect the lines
+            # Check all possible connections between endpoints
+            end1 = coords1[-1]  # End of first line
+            start2 = coords2[0]  # Start of second line
+            end2 = coords2[-1]   # End of second line
+            start1 = coords1[0]  # Start of first line
+            
+            # Calculate distances between potential connection points
+            dist_end1_start2 = ((end1[0] - start2[0])**2 + (end1[1] - start2[1])**2)**0.5
+            dist_end1_end2 = ((end1[0] - end2[0])**2 + (end1[1] - end2[1])**2)**0.5
+            
+            # Determine the best connection and orientation
+            if dist_end1_start2 <= tol:
+                # line1 end connects to line2 start - perfect sequential order
+                merged_coords = coords1 + coords2[1:]  # Skip duplicate point
+            elif dist_end1_end2 <= tol:
+                # line1 end connects to line2 end - need to reverse line2
+                merged_coords = coords1 + coords2[-2::-1]  # Reverse line2, skip duplicate
+            else:
+                # No direct connection within tolerance, try snapping approach
+                logging.getLogger(__name__).debug(
+                    f"Lines not directly connected (dist: {min(dist_end1_start2, dist_end1_end2):.6f}), using fallback method"
+                )
+                
+                # Fallback to original snapping method
+                snapped = snap(line2, line1, tol)
+                combined = unary_union([line1, snapped])
+                merged = linemerge(combined)
+                
+                # If result has multiple parts (MultiLineString), pick the longest
+                if merged.geom_type == "MultiLineString":
+                    parts = list(merged.geoms)
+                    merged = max(parts, key=lambda g: g.length)
+                
+                return merged
+            
+            # Create new LineString from merged coordinates
+            if len(merged_coords) >= 2:
+                return LineString(merged_coords)
+            else:
+                # Fallback if we don't have enough coordinates
+                return line1 if line1.length >= line2.length else line2
+                
         except (ValueError, Exception) as e:
-            # If linemerge fails, return the longer of the two original lines
+            # If merging fails, return the longer of the two original lines
             logging.getLogger(__name__).warning(
                 f"Failed to merge lines: {e}. Returning longer line."
             )
@@ -118,6 +159,23 @@ def merge_edge_attributes(e1: dict, e2: dict) -> dict:
     merged_geom = None
     if geom1 or geom2:
         merged_geom = safe_merge_lines(geom1, geom2)
+        
+        # Validate merged geometry
+        if merged_geom and merged_geom.is_valid:
+            # Update length based on actual merged geometry if it's reasonable
+            actual_length = merged_geom.length
+            expected_length = (l1 or 0) + (l2 or 0)
+            
+            # If the merged geometry length is significantly different from expected,
+            # it might indicate a merging problem, but we'll log it and continue
+            if expected_length > 0 and abs(actual_length - expected_length) / expected_length > 0.5:
+                logging.getLogger(__name__).warning(
+                    f"Merged geometry length ({actual_length:.2f}) differs significantly from sum of edge lengths ({expected_length:.2f})"
+                )
+        else:
+            logging.getLogger(__name__).warning(
+                f"Failed to create valid merged geometry for edges {e1.get('name', 'unknown')} and {e2.get('name', 'unknown')}"
+            )
 
     # Merge list attributes
     speeds = np.array(manipulate_list(e1.get("speeds"), e2.get("speeds"), "mean"))
