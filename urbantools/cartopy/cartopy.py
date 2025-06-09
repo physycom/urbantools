@@ -14,6 +14,18 @@ from shapely.ops import linemerge, snap, unary_union
 from tqdm import tqdm
 
 
+def set_logging_level(level: int = logging.INFO) -> None:
+    """
+    Set the logging level for the module.
+
+    Parameters
+    ----------
+    level : int
+        The logging level to set. Default is logging.INFO.
+    """
+    logging.getLogger(__name__).setLevel(level)
+
+
 def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
     """
     Merges degree-1 and degree-2 nodes in a directed graph by combining edges and attributes.
@@ -92,7 +104,7 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                     if geom1 or geom2:
                         merged_geom = safe_merge_lines(geom1, geom2)
 
-                    def avg_list(a, b):
+                    def manipulate_list(a, b, optype="mean"):
                         def is_empty(x):
                             if x is None:
                                 return True
@@ -112,9 +124,19 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                         arr_a = np.array(a)
                         arr_b = np.array(b)
                         if arr_a.shape == arr_b.shape:
-                            return ((arr_a + arr_b) / 2).tolist()
+                            if optype == "mean":
+                                return ((arr_a + arr_b) / 2).tolist()
+                            elif optype == "sum":
+                                return (arr_a + arr_b).tolist()
                         # If shapes don't match, return the first non-empty one
                         return a
+
+                    speeds = np.array(
+                        manipulate_list(e1.get("speeds"), e2.get("speeds"), "mean")
+                    )
+                    counts = np.array(
+                        manipulate_list(e1.get("counts"), e2.get("counts"), "sum")
+                    )
 
                     merged_attrs = {
                         "poly_length": total_length,
@@ -127,9 +149,10 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                         "name": e1.get("name", "") or e2.get("name", ""),
                         "highway": e1.get("highway", "") or e2.get("highway", ""),
                         "forbidden_turns": e2.get("forbidden_turns", ""),
-                        "flows": avg_list(e1.get("flows"), e2.get("flows")),
-                        "speeds": avg_list(e1.get("speeds"), e2.get("speeds")),
-                        "densities": avg_list(e1.get("densities"), e2.get("densities")),
+                        "counts": counts,
+                        "flows": counts * 12,
+                        "speeds": speeds,
+                        "densities": counts * 12 / speeds,
                     }
                     merged_edges.append((u, v, merged_attrs))
 
