@@ -1,9 +1,5 @@
-from setuptools import setup, find_packages
+# This file is kept for backward compatibility
+# All configuration is now in pyproject.toml
+from setuptools import setup
 
-setup(
-    name="urbantools",
-    version="0.0.13",
-    author="Physycom City Science Lab",
-    packages=find_packages(where="."),
-    package_dir={"": "."},
-)
+setup()

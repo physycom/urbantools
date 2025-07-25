@@ -25,7 +25,9 @@ def set_logging_level(level: int = logging.INFO) -> None:
     logging.getLogger(__name__).setLevel(level)
 
 
-def merge_edge_attributes(e1: dict, e2: dict) -> dict:
+def merge_edge_attributes(
+    e1: dict, e2: dict, length: str, name: str, speed: str
+) -> dict:
     """
     Merge attributes from two edges into a single edge.
 
@@ -35,6 +37,12 @@ def merge_edge_attributes(e1: dict, e2: dict) -> dict:
         First edge attributes dictionary
     e2 : dict
         Second edge attributes dictionary
+    length : str
+        The key to use for length attributes (e.g., "poly_length")
+    name : str
+        The key to use for name attributes (e.g., "name")
+    speed : str
+        The key to use for speed attributes (e.g., "maxspeed")
 
     Returns
     -------
@@ -75,7 +83,7 @@ def merge_edge_attributes(e1: dict, e2: dict) -> dict:
         """
         Merge two LineStrings by connecting them sequentially.
         This assumes line1 comes before line2 in the graph traversal (A->B->C).
-        
+
         The function:
           1. Checks connectivity between endpoints
           2. Reverses line2 if needed to maintain proper orientation
@@ -91,50 +99,56 @@ def merge_edge_attributes(e1: dict, e2: dict) -> dict:
             # Get coordinates
             coords1 = list(line1.coords)
             coords2 = list(line2.coords)
-            
+
             # Find the best way to connect the lines
             # Check all possible connections between endpoints
             end1 = coords1[-1]  # End of first line
             start2 = coords2[0]  # Start of second line
-            end2 = coords2[-1]   # End of second line
+            end2 = coords2[-1]  # End of second line
             start1 = coords1[0]  # Start of first line
-            
+
             # Calculate distances between potential connection points
-            dist_end1_start2 = ((end1[0] - start2[0])**2 + (end1[1] - start2[1])**2)**0.5
-            dist_end1_end2 = ((end1[0] - end2[0])**2 + (end1[1] - end2[1])**2)**0.5
-            
+            dist_end1_start2 = (
+                (end1[0] - start2[0]) ** 2 + (end1[1] - start2[1]) ** 2
+            ) ** 0.5
+            dist_end1_end2 = (
+                (end1[0] - end2[0]) ** 2 + (end1[1] - end2[1]) ** 2
+            ) ** 0.5
+
             # Determine the best connection and orientation
             if dist_end1_start2 <= tol:
                 # line1 end connects to line2 start - perfect sequential order
                 merged_coords = coords1 + coords2[1:]  # Skip duplicate point
             elif dist_end1_end2 <= tol:
                 # line1 end connects to line2 end - need to reverse line2
-                merged_coords = coords1 + coords2[-2::-1]  # Reverse line2, skip duplicate
+                merged_coords = (
+                    coords1 + coords2[-2::-1]
+                )  # Reverse line2, skip duplicate
             else:
                 # No direct connection within tolerance, try snapping approach
                 logging.getLogger(__name__).debug(
                     f"Lines not directly connected (dist: {min(dist_end1_start2, dist_end1_end2):.6f}), using fallback method"
                 )
-                
+
                 # Fallback to original snapping method
                 snapped = snap(line2, line1, tol)
                 combined = unary_union([line1, snapped])
                 merged = linemerge(combined)
-                
+
                 # If result has multiple parts (MultiLineString), pick the longest
                 if merged.geom_type == "MultiLineString":
                     parts = list(merged.geoms)
                     merged = max(parts, key=lambda g: g.length)
-                
+
                 return merged
-            
+
             # Create new LineString from merged coordinates
             if len(merged_coords) >= 2:
                 return LineString(merged_coords)
             else:
                 # Fallback if we don't have enough coordinates
                 return line1 if line1.length >= line2.length else line2
-                
+
         except (ValueError, Exception) as e:
             # If merging fails, return the longer of the two original lines
             logging.getLogger(__name__).warning(
@@ -143,15 +157,15 @@ def merge_edge_attributes(e1: dict, e2: dict) -> dict:
             return line1 if line1.length >= line2.length else line2
 
     # Calculate length-weighted attributes
-    l1, l2 = e1.get("poly_length", 0), e2.get("poly_length", 0)
-    total_length = (l1 + l2) if (l1 and l2) else (l1 or l2 or 0)
+    l1, l2 = e1.get(length), e2.get(length)
+    total_length = l1 + l2
 
     w1 = e1.get("width_TF", e1.get("width_FT", 2))
     w2 = e2.get("width_TF", e2.get("width_FT", 2))
     width = (w1 * l1 + w2 * l2) / total_length if total_length else max(w1, w2)
 
     # Merge other attributes
-    maxspeed = max(e1.get("maxspeed", 0), e2.get("maxspeed", 0))
+    maxspeed = max(e1.get(speed, 0), e2.get(speed, 0))
     mean_flow = (e1.get("mean_flow", 0) + e2.get("mean_flow", 0)) / 2
 
     # Merge geometry
@@ -159,16 +173,19 @@ def merge_edge_attributes(e1: dict, e2: dict) -> dict:
     merged_geom = None
     if geom1 or geom2:
         merged_geom = safe_merge_lines(geom1, geom2)
-        
+
         # Validate merged geometry
         if merged_geom and merged_geom.is_valid:
             # Update length based on actual merged geometry if it's reasonable
             actual_length = merged_geom.length
             expected_length = (l1 or 0) + (l2 or 0)
-            
+
             # If the merged geometry length is significantly different from expected,
             # it might indicate a merging problem, but we'll log it and continue
-            if expected_length > 0 and abs(actual_length - expected_length) / expected_length > 0.5:
+            if (
+                expected_length > 0
+                and abs(actual_length - expected_length) / expected_length > 0.5
+            ):
                 logging.getLogger(__name__).warning(
                     f"Merged geometry length ({actual_length:.2f}) differs significantly from sum of edge lengths ({expected_length:.2f})"
                 )
@@ -190,15 +207,22 @@ def merge_edge_attributes(e1: dict, e2: dict) -> dict:
         f"Merged edges {e1.get('name', 'unknown')} and {e2.get('name', 'unknown')}"
     )
 
+    # Error if total_length is zero
+    if total_length == 0:
+        logging.getLogger(__name__).error(
+            f"Total length of merged edges is zero. Cannot merge {e1.get('name', 'unknown')} and {e2.get('name', 'unknown')}"
+        )
+        raise ValueError("Total length of merged edges cannot be zero.")
+
     return {
-        "poly_length": total_length,
-        "length": total_length,
+        length: total_length,
         "nlanes": max(e1.get("nlanes", 1), e2.get("nlanes", 1)),
         "width_TF": width,
-        "maxspeed": maxspeed,
+        "poly_cid": f"{e1.get('poly_cid', 'N/A')}+{e2.get('poly_cid', 'N/A')}",
+        speed: maxspeed,
         "mean_flow": mean_flow,
         "geometry": merged_geom,
-        "name": e1.get("name", "") or e2.get("name", ""),
+        name: e1.get(name, "") or e2.get(name, ""),
         "highway": e1.get("highway", "") or e2.get("highway", ""),
         "forbidden_turns": e2.get("forbidden_turns", ""),
         "counts": counts,
@@ -208,7 +232,9 @@ def merge_edge_attributes(e1: dict, e2: dict) -> dict:
     }
 
 
-def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
+def merge_redundant_edges(
+    graph: nx.DiGraph, length="poly_length", name="name", speed="maxspeed"
+) -> nx.DiGraph:
     """
     Merges degree-1 and degree-2 nodes in a directed graph by combining edges and attributes.
 
@@ -242,7 +268,9 @@ def merge_redundant_edges(graph: nx.DiGraph) -> nx.DiGraph:
                         continue
 
                     e1, e2 = G[u][n], G[n][v]
-                    merged_attrs = merge_edge_attributes(e1, e2)
+                    merged_attrs = merge_edge_attributes(
+                        e1, e2, length=length, name=name, speed=speed
+                    )
                     merged_edges.append((u, v, merged_attrs))
 
             if merged_edges:
@@ -777,3 +805,110 @@ def handle_overlap(
     )
 
     return graph
+
+
+def reconnect_components_via_shortest_path(G_filtered, G_original, weight):
+    """
+    Reconnect disconnected components in G_filtered using shortest paths from G_original.
+    Memory-optimized version that processes components one at a time.
+
+    Parameters
+    ----------
+    G_filtered : nx.DiGraph
+        The filtered graph with disconnected components.
+    G_original : nx.DiGraph
+        The original graph containing all edges.
+    weight : str
+        The edge attribute to use as weight for shortest path calculations.
+
+    Returns
+    -------
+    nx.DiGraph
+        The reconnected graph with all components connected.
+    """
+    components = list(nx.weakly_connected_components(G_filtered))
+
+    if len(components) <= 1:
+        logging.getLogger(__name__).info(
+            "Graph is already connected or has only one component"
+        )
+        return G_filtered
+
+    logging.getLogger(__name__).info(f"Found {len(components)} disconnected components")
+
+    # Sort components by size (largest first)
+    components.sort(key=len, reverse=True)
+    largest_component = set(components[0])
+
+    G_reconnected = G_filtered.copy()
+    paths_added = 0
+
+    # Process each smaller component individually to save memory
+    for i, component in enumerate(tqdm(components[1:]), 1):
+        # print(f"Reconnecting component {i} (size: {len(component)})")
+
+        best_distance = float("inf")
+        best_path = None
+
+        # For each node in the current component, find the closest connection
+        # to the largest component using a limited search
+        for comp_node in component:
+            try:
+                # Use single_source_dijkstra with cutoff to limit memory usage
+                cutoff = min(best_distance * 1.1, 10000)  # Reasonable distance limit
+                distances, paths = nx.single_source_dijkstra(
+                    G_original, comp_node, cutoff=cutoff, weight=weight
+                )
+
+                # Find the closest node in the largest component
+                for target_node, distance in distances.items():
+                    if target_node in largest_component and distance < best_distance:
+                        best_distance = distance
+                        # Use the path directly from the paths dictionary
+                        best_path = paths[target_node]
+
+            except (nx.NetworkXNoPath, nx.NetworkXError):
+                continue
+
+        # If no path found with the component nodes as sources, try reverse search
+        if best_path is None:
+            # print(f"  No path found from component {i}, trying reverse search...")
+            # Sample a few nodes from the largest component for reverse search
+            sample_size = min(50, len(largest_component))
+            sample_nodes = list(largest_component)[:sample_size]
+
+            for large_node in sample_nodes:
+                try:
+                    distances, paths = nx.single_source_dijkstra(
+                        G_original, large_node, cutoff=5000, weight=weight
+                    )
+
+                    for comp_node in component:
+                        if (
+                            comp_node in distances
+                            and distances[comp_node] < best_distance
+                        ):
+                            best_distance = distances[comp_node]
+                            # Use the path directly from the paths dictionary
+                            best_path = paths[comp_node]
+
+                except (nx.NetworkXNoPath, nx.NetworkXError):
+                    continue
+
+        # Add the best path found
+        if best_path is not None:
+            for j in range(len(best_path) - 1):
+                u, v = best_path[j], best_path[j + 1]
+                if G_original.has_edge(u, v):
+                    edge_data = G_original[u][v]
+                    G_reconnected.add_edge(u, v, **edge_data)
+            paths_added += 1
+            # Merge this component with the largest component for future searches
+            largest_component.update(component)
+        else:
+            logging.getLogger(__name__).warning(f"No path found for component {i}")
+
+    logging.getLogger(__name__).info(
+        f"Total paths added for reconnection: {paths_added}"
+    )
+    return G_reconnected
